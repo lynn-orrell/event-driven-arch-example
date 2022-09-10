@@ -14,8 +14,13 @@ IHost host = Host.CreateDefaultBuilder(args)
             System.Environment.Exit(0);
         }
 
-        var sbAdminClient = new ServiceBusAdministrationClient(fullyQualifiedNamespace, new DefaultAzureCredential());
-        var sbClient = new ServiceBusClient(fullyQualifiedNamespace, new DefaultAzureCredential());
+        var managedIdentityClientId = Environment.GetEnvironmentVariable("MANAGED_IDENTITY_CLIENT_ID");
+
+        var defaultAzureCredential = string.IsNullOrEmpty(managedIdentityClientId) ? new DefaultAzureCredential() : 
+                                                                                     new DefaultAzureCredential(new DefaultAzureCredentialOptions { ManagedIdentityClientId = managedIdentityClientId });
+
+        var sbAdminClient = new ServiceBusAdministrationClient(fullyQualifiedNamespace, defaultAzureCredential);
+        var sbClient = new ServiceBusClient(fullyQualifiedNamespace, defaultAzureCredential);
 
         services.AddHostedService<Worker>();
         services.AddSingleton<ServiceBusAdministrationClient>(implementationInstance: sbAdminClient);

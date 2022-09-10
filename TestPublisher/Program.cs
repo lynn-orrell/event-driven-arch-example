@@ -27,7 +27,12 @@ internal class Program
             Environment.Exit(0);
         }
 
-        _sbClient = new ServiceBusClient(sbNamespace, new DefaultAzureCredential());
+        var managedIdentityClientId = Environment.GetEnvironmentVariable("MANAGED_IDENTITY_CLIENT_ID");
+
+        var defaultAzureCredential = string.IsNullOrEmpty(managedIdentityClientId) ? new DefaultAzureCredential() : 
+                                                                                     new DefaultAzureCredential(new DefaultAzureCredentialOptions { ManagedIdentityClientId = managedIdentityClientId });
+
+        _sbClient = new ServiceBusClient(sbNamespace, defaultAzureCredential);
         _queueSender = _sbClient.CreateSender("order-orchestration");
     }        
 
