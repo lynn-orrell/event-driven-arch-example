@@ -8,7 +8,7 @@ namespace OrchestratorService;
 
 public class Worker : BackgroundService
 {
-    private const decimal ITEM_PRICE = 10.00M;
+    private const decimal ITEM_PRICE = 50.00M;
     private readonly ILogger<Worker> _logger;
     private readonly ServiceBusAdministrationClient _sbAdminClient;
     private readonly ServiceBusClient _sbClient;
@@ -188,15 +188,25 @@ public class Worker : BackgroundService
     {
         if(orderState.CurrentOrderState == OrderState.OrderStateEnum.PROCESSING)
         {
-            if(orderState.AccountAdjustmentStatus != null && orderState.InventoryAdjustmentStatus != null)
+            // Invalid Account Number
+            if(orderState.AccountAdjustmentStatus == AccountAdjustmentStatus.INVALID_ACCOUNT_NUMBER)
             {
-                // Insufficient inventory
+                LogOrderRejected(orderState, $"{Enum.GetName<AccountAdjustmentStatus>(orderState.AccountAdjustmentStatus.Value)}");
+                // Move Order State to REJECTED (terminal)
+                orderState.CurrentOrderState = OrderState.OrderStateEnum.REJECTED;
+                // Publish order rejected event
+                await PublishOrderRejectedEvent(new OrderRejectedEvent(orderState.OrderCreatedEvent) { OrderRejectedReason = OrderRejectedReason.INVALID_ACCOUNT_NUMBER });
+            }
+            else if(orderState.AccountAdjustmentStatus != null && orderState.InventoryAdjustmentStatus != null)
+            {
+                // Insufficient Inventory
                 if(orderState.AccountAdjustmentStatus == AccountAdjustmentStatus.SUCCESS && orderState.InventoryAdjustmentStatus != InventoryAdjustmentStatus.SUCCESS)
                 {
                     LogOrderRejected(orderState, $"{Enum.GetName<InventoryAdjustmentStatus>(orderState.InventoryAdjustmentStatus.Value)}");
+                    // Move Order State to REJECTED (terminal)
                     orderState.CurrentOrderState = OrderState.OrderStateEnum.REJECTED;
-                    // Send inventory compensating transaction
-                    await SendInventoryAdjustmentCommand(orderState.InventoryAdjustmentAmount * -1, args.Message.SessionId);                    
+                    // Send account compensating transaction
+                    await SendCompensatingAccountTransaction(orderState, args);
                     // Publish order rejected event
                     await PublishOrderRejectedEvent(new OrderRejectedEvent(orderState.OrderCreatedEvent) { OrderRejectedReason = OrderRejectedReason.INSUFFICIENT_INVENTORY });
                 }
@@ -204,9 +214,10 @@ public class Worker : BackgroundService
                 else if (orderState.AccountAdjustmentStatus != AccountAdjustmentStatus.SUCCESS && orderState.InventoryAdjustmentStatus == InventoryAdjustmentStatus.SUCCESS)
                 {
                     LogOrderRejected(orderState, $"{Enum.GetName<AccountAdjustmentStatus>(orderState.AccountAdjustmentStatus.Value)}");
+                    // Move Order State to REJECTED (terminal)
                     orderState.CurrentOrderState = OrderState.OrderStateEnum.REJECTED;
-                    // Send account compensating transaction
-                    await SendAccountAdjustmentCommand(orderState.OrderCreatedEvent.AccountNumber, orderState.AccountAdjustmentAmount * -1, args.Message.SessionId);
+                    // Send inventory compensating transaction
+                    await SendCompensatingInventoryTransaction(orderState, args);
                     // Publish order rejected event
                     await PublishOrderRejectedEvent(new OrderRejectedEvent(orderState.OrderCreatedEvent) { OrderRejectedReason = OrderRejectedReason.INSUFFICIENT_CREDIT });
                 }
@@ -214,6 +225,7 @@ public class Worker : BackgroundService
                 else if (orderState.AccountAdjustmentStatus != AccountAdjustmentStatus.SUCCESS && orderState.InventoryAdjustmentStatus != InventoryAdjustmentStatus.SUCCESS)
                 {
                     LogOrderRejected(orderState, $"{Enum.GetName<InventoryAdjustmentStatus>(orderState.InventoryAdjustmentStatus.Value)} | {Enum.GetName<AccountAdjustmentStatus>(orderState.AccountAdjustmentStatus.Value)}");
+                    // Move Order State to REJECTED (terminal)
                     orderState.CurrentOrderState = OrderState.OrderStateEnum.REJECTED;
                     // No need to send compensating transaction as both failed
                     // Publish order rejected event
@@ -223,15 +235,27 @@ public class Worker : BackgroundService
                 else
                 {
                     LogOrderCompleted(orderState);
+                    // Move Order State to COMPLETED (terminal)
                     orderState.CurrentOrderState = OrderState.OrderStateEnum.COMPLETED;
                     // Publish order completed event
                     await PublishOrderCompletedEvent(new OrderCompletedEvent(orderState.OrderCreatedEvent));
                 }
-
-                // Update session state
-                await args.SetSessionStateAsync(BinaryData.FromObjectAsJson<OrderState>(orderState));
             }
+            // Update session state
+            await args.SetSessionStateAsync(BinaryData.FromObjectAsJson<OrderState>(orderState));
         }
+    }
+
+    private Task SendCompensatingAccountTransaction(OrderState orderState, ProcessSessionMessageEventArgs args)
+    {
+        _logger.LogInformation($"Sending compensating account transaction for Order. [OrderId: {orderState.OrderCreatedEvent.OrderId}, AccountNumber: {orderState.OrderCreatedEvent.AccountNumber}, Amount: {orderState.AccountAdjustmentAmount * -1}]");
+        return SendAccountAdjustmentCommand(orderState.OrderCreatedEvent.AccountNumber, orderState.AccountAdjustmentAmount * -1, args.Message.SessionId);
+    }
+
+    private Task SendCompensatingInventoryTransaction(OrderState orderState, ProcessSessionMessageEventArgs args)
+    {
+        _logger.LogInformation($"Sending compensating inventory transaction for Order. [OrderId: {orderState.OrderCreatedEvent.OrderId}, Quantity: {orderState.OrderCreatedEvent.Quantity}]");
+        return SendInventoryAdjustmentCommand(orderState.InventoryAdjustmentAmount * -1, args.Message.SessionId);
     }
 
     private void LogOrderCompleted(OrderState orderState)
