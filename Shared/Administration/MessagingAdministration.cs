@@ -47,7 +47,8 @@ public class MessagingAdministration
         // Create Orders Topic
         if(!(await _sbAdminClient.TopicExistsAsync(name: ORDERS_TOPIC, cancellationToken: cancellationToken)).Value)
         {
-            await _sbAdminClient.CreateTopicAsync(name: ORDERS_TOPIC, cancellationToken: cancellationToken);
+            var createTopicOptions = new CreateTopicOptions(name: ORDERS_TOPIC) { RequiresDuplicateDetection = true };
+            await _sbAdminClient.CreateTopicAsync(createTopicOptions, cancellationToken: cancellationToken);
         }
         
         // Create Order Orchestration Subscription
